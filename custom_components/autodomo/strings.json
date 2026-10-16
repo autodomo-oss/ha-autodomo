@@ -63,6 +63,17 @@
     "missing_entity": {
       "title": "Entidade exposta ao AutoDomo não existe mais",
       "description": "A entidade `{entity_id}` está marcada para aparecer no app AutoDomo, mas não existe mais no Home Assistant. Abra **Configurar** na integração AutoDomo e desmarque-a."
+    },
+    "restart_required": {
+      "title": "AutoDomo {version} instalado: reinicie o Home Assistant",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Reiniciar o Home Assistant",
+            "description": "A versão {version} do AutoDomo foi instalada. Ela só passa a valer depois de reiniciar o Home Assistant (leva menos de um minuto). Reiniciar agora?"
+          }
+        }
+      }
     }
   }
 }

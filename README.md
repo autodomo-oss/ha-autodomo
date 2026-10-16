@@ -31,6 +31,10 @@ TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
 - Presença: o app mostra a ponte online/offline.
 - *Reparos*: se uma entidade exposta deixar de existir, o HA avisa.
 - *Baixar diagnóstico* na integração gera um relatório sem segredos para suporte.
+- **Atualiza sozinha, sem HACS**: versão nova aparece em *Configurações →
+  Atualizações* como qualquer atualização do HA; *Instalar* baixa do GitHub
+  (sem login) e um reparo pede para reiniciar. Se o HACS já cuida do AutoDomo,
+  só o aviso do HACS aparece.
 
 ## O que é exposto
 
