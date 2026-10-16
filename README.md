@@ -18,8 +18,9 @@ internet. O Home Assistant vira uma *ponte* da sua casa no AutoDomo.
    **AutoDomo** (ou o botão *Adicionar integração* acima) → digite o código →
    confirme a lista do que o app pode ver. Pronto.
 
-Luzes, interruptores, persianas, clima, fechaduras e ventiladores já vêm
-marcados; sensores você escolhe. Tudo pode ser mudado depois em *Configurar*.
+Luzes, interruptores, persianas, clima, fechaduras, ventiladores, aspiradores,
+válvulas, aquecedores de água e umidificadores já vêm marcados; sensores,
+TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
 
 ## Como funciona
 
@@ -43,6 +44,12 @@ marcados; sensores você escolhe. Tudo pode ser mudado depois em *Configurar*.
 | fan | liga/desliga, velocidade |
 | sensor, binary_sensor | valor e unidade / ligado-desligado |
 | scene, button | ativar / pressionar |
+| media_player | liga/desliga, tocar/pausar, faixa, volume, mudo, fonte |
+| vacuum | limpar, pausar, parar, voltar à base, localizar, potência |
+| alarm_control_panel | armar (em casa/fora/noite/férias) e desarmar, com código |
+| valve | abrir/fechar/parar, posição |
+| water_heater | liga/desliga, temperatura alvo/atual, modo |
+| humidifier | liga/desliga, umidade alvo/atual, modo |
 
 Contrato de dados: [`AutoDomo/autodomo-cloud`](https://github.com/AutoDomo/autodomo-cloud)
 (`docs/modelo-dados.md`).

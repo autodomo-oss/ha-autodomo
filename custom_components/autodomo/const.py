@@ -42,12 +42,19 @@ SUPPORTED_DOMAINS: tuple[str, ...] = (
     "fan",
     "scene",
     "button",
+    "media_player",
+    "vacuum",
+    "alarm_control_panel",
+    "valve",
+    "water_heater",
+    "humidifier",
 )
 
 # Pre-selecionados na instalacao e cobertos pelo "expor automaticamente":
 # o que a pessoa controla. Sensores ficam de fora por padrao (costumam ser
-# dezenas de entidades de sistema).
-AUTO_DOMAINS: tuple[str, ...] = ("light", "switch", "cover", "climate", "lock", "fan")
+# dezenas de entidades de sistema); media_player tambem (o HA cria varios de
+# Chromecast/Spotify/grupos) e alarme (seguranca: so' se a pessoa escolher).
+AUTO_DOMAINS: tuple[str, ...] = ("light", "switch", "cover", "climate", "lock", "fan", "vacuum", "valve", "water_heater", "humidifier")
 
 STATE_DEBOUNCE_S = 0.3
 HEARTBEAT_INTERVAL_S = 30
