@@ -30,6 +30,7 @@ from .const import (
     STREAM_RETRY_MAX_S,
     STREAM_RETRY_MIN_S,
 )
+from . import alexa
 from .firebase import FirebaseAuthError, FirebaseClient, FirebaseError, StreamTokenExpired
 from .mapping import device_id_for, device_payload, entity_id_for, service_for_command, state_payload
 
@@ -69,6 +70,7 @@ class AutodomoBridge:
         self._debounce: dict[str, CALLBACK_TYPE] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
+        self._alexa_published: dict[str, Any] | None = None  # ultima lista de Echo publicada
 
     # ----- ciclo de vida -----
 
@@ -339,6 +341,15 @@ class AutodomoBridge:
             await self._handle_command(parts[0], data)
         # patch em campo de um comando existente: ignorado (comando e' imutavel)
 
+    async def _publish_alexa(self) -> None:
+        """Echo disponiveis (Alexa lendo a conversa) - so' escreve quando muda."""
+        echos = alexa.discover_echos(self.hass)
+        if echos == self._alexa_published:
+            return
+        await self.client.put(f"{self._bridge_path()}/alexa", {"echos": echos} if echos else None)
+        self._alexa_published = echos
+        _LOGGER.debug("Echo publicados: %s", ", ".join(e["name"] for e in echos.values()) or "nenhum")
+
     async def _handle_command(self, cmd_id: str, cmd: Any) -> None:
         try:
             if not isinstance(cmd, dict):
@@ -346,6 +357,9 @@ class AutodomoBridge:
             ts = int(cmd.get("ts") or 0)
             if ts and _now_ms() - ts > COMMAND_MAX_AGE_S * 1000:
                 _LOGGER.debug("comando %s velho (%ds) - descartado", cmd_id, (_now_ms() - ts) // 1000)
+                return
+            if cmd.get("action") == "speak":
+                await alexa.speak(self.hass, cmd.get("params"))
                 return
             entity_id = entity_id_for(str(cmd.get("deviceId", "")))
             if entity_id is None or entity_id not in self.entity_ids:
@@ -378,6 +392,7 @@ class AutodomoBridge:
                     payload["info"] = info
                 await self.client.patch(self._bridge_path(), payload)
                 first = False
+                await self._publish_alexa()
                 await self._reconcile_unpublished()
                 self._check_missing_entities()
             except FirebaseAuthError as err:
