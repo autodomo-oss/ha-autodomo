@@ -63,17 +63,6 @@
     "missing_entity": {
       "title": "Entity exposed to AutoDomo no longer exists",
       "description": "Entity `{entity_id}` is selected for the AutoDomo app but no longer exists in Home Assistant. Open **Configure** on the AutoDomo integration and unselect it."
-    },
-    "restart_required": {
-      "title": "AutoDomo {version} installed: restart Home Assistant",
-      "fix_flow": {
-        "step": {
-          "confirm": {
-            "title": "Restart Home Assistant",
-            "description": "AutoDomo {version} was installed. It takes effect after Home Assistant restarts (less than a minute). Restart now?"
-          }
-        }
-      }
     }
   }
 }

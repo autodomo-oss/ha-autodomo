@@ -63,7 +63,3 @@ STREAM_RETRY_MIN_S = 2
 STREAM_RETRY_MAX_S = 60
 
 ISSUE_MISSING_ENTITY = "missing_entity"
-ISSUE_RESTART_REQUIRED = "restart_required"
-
-# Repositorio publico de onde a integracao se atualiza (update.py).
-GITHUB_REPO = "autodomo-oss/ha-autodomo"
