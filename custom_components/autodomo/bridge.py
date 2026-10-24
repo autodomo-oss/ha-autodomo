@@ -66,6 +66,9 @@ class AutodomoBridge:
         self.auth_failed = False
 
         self._published: set[str] = set()  # entidades cujo devices/{id} ja' foi escrito
+        # Controle remoto (ex: modulo IR): botoes do mesmo aparelho do HA de um
+        # botao escolhido entram juntos - o app monta a tela do controle com eles.
+        self._remote_devices: set[str] = set()
         self._unsub: list[CALLBACK_TYPE] = []
         self._debounce: dict[str, CALLBACK_TYPE] = {}
         self._tasks: list[asyncio.Task[None]] = []
@@ -77,6 +80,8 @@ class AutodomoBridge:
     async def async_start(self) -> None:
         if self.auto_add:
             self.entity_ids |= {s.entity_id for s in self.hass.states.async_all() if s.domain in AUTO_DOMAINS}
+        self.entity_ids |= self._remote_siblings()
+        self._unsub.append(self.hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, self._on_registry_updated))
         # Assina ANTES de publicar a foto: as publicacoes esperam a rede, e o que
         # mudar nesse meio tempo se perdia (no boot do HA as entidades MQTT vao de
         # unavailable pra unknown justo ai' - botao ficava offline no app pra sempre).
@@ -146,11 +151,75 @@ class AutodomoBridge:
         area = ar.async_get(self.hass).async_get_area(area_id)
         return area.name if area else None
 
+    # ----- controle remoto: botoes agrupados por aparelho -----
+
+    def _remote_siblings(self) -> set[str]:
+        """Todos os botoes dos aparelhos que tem algum botao escolhido."""
+        ent_reg = er.async_get(self.hass)
+        self._remote_devices = {
+            e.device_id
+            for eid in self.selected
+            if eid.startswith("button.") and (e := ent_reg.async_get(eid)) is not None and e.device_id
+        }
+        return {
+            e.entity_id
+            for dev in self._remote_devices
+            for e in er.async_entries_for_device(ent_reg, dev)
+            if e.domain == "button" and e.disabled_by is None
+        }
+
+    def _remote_caps(self, entity_id: str, state: Any) -> dict[str, Any] | None:
+        """caps.remote do botao: aparelho do HA + nome original (o app reconhece
+        a tecla pelo nome com que o botao foi gravado, nao pelo renomeado)."""
+        if not entity_id.startswith("button."):
+            return None
+        entry = er.async_get(self.hass).async_get(entity_id)
+        if entry is None or not entry.device_id:
+            return None
+        return {"id": entry.device_id, "key": entry.original_name or state.name}
+
+    def _with_remote(self, entity_id: str, state: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        remote = self._remote_caps(entity_id, state)
+        if remote is not None:
+            payload["caps"] = {**payload.get("caps", {}), "remote": remote}
+        return payload
+
+    @callback
+    def _on_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        """Botao gravado/apagado depois (favorito novo no modulo IR) entra/sai sozinho."""
+        entity_id = event.data["entity_id"]
+        if not entity_id.startswith("button.") or entity_id in self.selected:
+            return
+        action = event.data["action"]
+        if action == "create":
+            entry = er.async_get(self.hass).async_get(entity_id)
+            if entry is None or entry.device_id not in self._remote_devices or entity_id in self.entity_ids:
+                return
+            self.entity_ids.add(entity_id)
+            if not self.auto_add:
+                self._unsub.append(async_track_state_change_event(self.hass, [entity_id], self._on_state_changed))
+            if self.hass.states.get(entity_id) is not None:
+                self.hass.async_create_task(self._push_state(entity_id))
+        elif action == "remove" and entity_id in self.entity_ids:
+            self.entity_ids.discard(entity_id)
+            self._published.discard(entity_id)
+            self.hass.async_create_task(self._unpublish(entity_id))
+
+    async def _unpublish(self, entity_id: str) -> None:
+        did = device_id_for(entity_id)
+        try:
+            # state antes do device: a regra de state exige que o device exista
+            await self.client.delete(self._state_path(did))
+            await self.client.delete(f"{self._devices_path()}/{did}")
+        except FirebaseError as err:
+            _LOGGER.debug("nao deu pra tirar %s do app: %s", entity_id, err)
+
     async def _publish_device(self, entity_id: str, state: Any) -> bool:
         payload = device_payload(state, self._room_for(entity_id))
         if payload is None:
             _LOGGER.warning("entidade %s de dominio nao suportado - ignorada", entity_id)
             return False
+        payload = self._with_remote(entity_id, state, payload)
         payload["bridge"] = self.bridge_id
         await self.client.put(f"{self._devices_path()}/{device_id_for(entity_id)}", payload)
         self._published.add(entity_id)
@@ -174,6 +243,7 @@ class AutodomoBridge:
             if payload is None:
                 _LOGGER.warning("entidade %s de dominio nao suportado - ignorada", entity_id)
                 continue
+            payload = self._with_remote(entity_id, state, payload)
             payload["bridge"] = self.bridge_id
             updates[did] = payload
             self._published.add(entity_id)
