@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from functools import partial
 import logging
 import random
@@ -26,6 +27,8 @@ from .const import (
     DOMAIN,
     HEARTBEAT_INTERVAL_S,
     ISSUE_MISSING_ENTITY,
+    RTC_OFFER_MAX_AGE_S,
+    RTC_SESSION_MAX_S,
     STATE_DEBOUNCE_S,
     STREAM_RETRY_MAX_S,
     STREAM_RETRY_MIN_S,
@@ -39,6 +42,15 @@ _LOGGER = logging.getLogger(__name__)
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _supports_webrtc(camera: Any) -> bool:
+    """A camera entrega WebRTC (go2rtc do HA ou nativo)?"""
+    try:
+        types = camera.camera_capabilities.frontend_stream_types
+    except Exception:  # noqa: BLE001 - HA antigo / camera sem stream
+        return False
+    return any(getattr(t, "value", t) == "web_rtc" for t in types)
 
 
 class AutodomoBridge:
@@ -74,6 +86,9 @@ class AutodomoBridge:
         self._tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
         self._alexa_published: dict[str, Any] | None = None  # ultima lista de Echo publicada
+        # Camera: sessoes WebRTC abertas (sid -> camera, contador de candidatos,
+        # trava pra resposta sair antes dos candidatos, timer do limite).
+        self._rtc: dict[str, dict[str, Any]] = {}
 
     # ----- ciclo de vida -----
 
@@ -94,7 +109,14 @@ class AutodomoBridge:
         await self._publish_devices()
         await self._publish_all_states()
         self._check_missing_entities()
-        self._tasks.append(self.hass.async_create_background_task(self._command_loop(), "autodomo_commands"))
+        self._tasks.append(
+            self.hass.async_create_background_task(
+                self._stream_loop(self._commands_path(), self._on_command_event), "autodomo_commands"
+            )
+        )
+        self._tasks.append(
+            self.hass.async_create_background_task(self._stream_loop(self._rtc_path(), self._on_rtc_event, critical=False), "autodomo_rtc")
+        )
         self._tasks.append(self.hass.async_create_background_task(self._heartbeat_loop(), "autodomo_heartbeat"))
         _LOGGER.info(
             "ponte %s da casa %s ativa com %d entidades (auto: %s)",
@@ -115,6 +137,8 @@ class AutodomoBridge:
         for task in self._tasks:
             task.cancel()
         self._tasks.clear()
+        for sid in list(self._rtc):
+            self._rtc_close(sid)
         if not self.auth_failed:
             try:
                 await self.client.patch(self._bridge_path(), {"online": False, "lastSeen": _now_ms()})
@@ -134,6 +158,9 @@ class AutodomoBridge:
 
     def _commands_path(self) -> str:
         return f"commands/{self.home_id}/{self.bridge_id}"
+
+    def _rtc_path(self) -> str:
+        return f"rtc/{self.home_id}/{self.bridge_id}"
 
     # ----- devices -----
 
@@ -178,11 +205,123 @@ class AutodomoBridge:
             return None
         return {"id": entry.device_id, "key": entry.original_name or state.name}
 
-    def _with_remote(self, entity_id: str, state: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    def _with_extras(self, entity_id: str, state: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        """caps que dependem de registro/objeto do HA, nao so' do estado."""
         remote = self._remote_caps(entity_id, state)
         if remote is not None:
             payload["caps"] = {**payload.get("caps", {}), "remote": remote}
+        if entity_id.startswith("camera.") and (camera := self._camera(entity_id)) is not None:
+            payload["caps"] = {**payload.get("caps", {}), "webrtc": _supports_webrtc(camera)}
         return payload
+
+    # ----- camera: video direto HA -> celular (WebRTC) -----
+
+    def _camera(self, entity_id: str) -> Any | None:
+        """Objeto da camera no HA (None se nao existe ou esta' desligada)."""
+        from homeassistant.components.camera.helper import get_camera_from_entity_id  # noqa: PLC0415
+        from homeassistant.exceptions import HomeAssistantError  # noqa: PLC0415
+
+        try:
+            return get_camera_from_entity_id(self.hass, entity_id)
+        except HomeAssistantError:
+            return None
+
+    async def _on_rtc_event(self, event: str, path: str, data: Any) -> None:
+        if path in ("", "/"):
+            # Carga inicial (ou no' inteiro apagado): sessoes pendentes.
+            if isinstance(data, dict):
+                for sid, sess in list(data.items()):
+                    await self._rtc_open(sid, sess)
+            return
+        parts = path.strip("/").split("/")
+        if len(parts) != 1:
+            return  # answer/c/error: escritas nossas voltando pelo stream
+        if data is None:
+            self._rtc_close(parts[0])  # app saiu da tela (ou nos mesmos apagamos)
+        elif isinstance(data, dict):
+            await self._rtc_open(parts[0], data)
+
+    async def _rtc_open(self, sid: str, sess: Any) -> None:
+        if sid in self._rtc or not isinstance(sess, dict) or "answer" in sess or "error" in sess:
+            return
+        node = f"{self._rtc_path()}/{sid}"
+        ts = int(sess.get("ts") or 0)
+        if _now_ms() - ts > RTC_OFFER_MAX_AGE_S * 1000:
+            await self._rtc_delete(node)  # ninguem mais esperando
+            return
+        entity_id = entity_id_for(str(sess.get("deviceId", "")))
+        offer = sess.get("offer")
+        camera = self._camera(entity_id) if entity_id and entity_id.startswith("camera.") else None
+        if camera is None or entity_id not in self.entity_ids or not isinstance(offer, str):
+            await self._rtc_error(node, "camera_unavailable")
+            return
+        if not _supports_webrtc(camera):
+            await self._rtc_error(node, "webrtc_not_supported")
+            return
+
+        info: dict[str, Any] = {"camera": camera, "n": 0, "lock": asyncio.Lock()}
+        info["timer"] = async_call_later(self.hass, RTC_SESSION_MAX_S, partial(self._rtc_expire, sid))
+        self._rtc[sid] = info
+
+        @callback
+        def send_message(message: Any) -> None:
+            # Resposta e candidatos chegam pelo callback do go2rtc; a trava
+            # mantem a ordem (resposta antes dos candidatos).
+            self.hass.async_create_task(self._rtc_send(sid, node, message.as_dict()))
+
+        _LOGGER.debug("camera %s: sessao %s aberta", entity_id, sid)
+        try:
+            await camera.async_handle_async_webrtc_offer(offer, sid, send_message)
+        except Exception as err:  # noqa: BLE001 - erro da camera nao derruba a ponte
+            _LOGGER.warning("camera %s: oferta recusada: %s", entity_id, err)
+            self._rtc_close(sid)
+            await self._rtc_error(node, "webrtc_offer_failed")
+
+    async def _rtc_send(self, sid: str, node: str, msg: dict[str, Any]) -> None:
+        info = self._rtc.get(sid)
+        if info is None:
+            return
+        async with info["lock"]:
+            try:
+                if msg.get("type") == "answer":
+                    await self.client.put(f"{node}/answer", msg["answer"])
+                elif msg.get("type") == "candidate":
+                    cand = msg.get("candidate") or {}
+                    await self.client.put(f"{node}/c/{info['n']}", {k: v for k, v in cand.items() if v is not None})
+                    info["n"] += 1
+                elif msg.get("type") == "error":
+                    _LOGGER.warning("camera: erro na sessao %s: %s", sid, msg.get("message"))
+                    await self.client.put(f"{node}/error", str(msg.get("code") or "error")[:200])
+            except FirebaseError as err:
+                _LOGGER.debug("camera: nao deu pra responder a sessao %s: %s", sid, err)
+
+    async def _rtc_error(self, node: str, code: str) -> None:
+        try:
+            await self.client.put(f"{node}/error", code)
+        except FirebaseError as err:
+            _LOGGER.debug("camera: nao deu pra avisar erro em %s: %s", node, err)
+
+    async def _rtc_delete(self, node: str) -> None:
+        try:
+            await self.client.delete(node)
+        except FirebaseError as err:
+            _LOGGER.debug("camera: nao deu pra apagar %s: %s", node, err)
+
+    async def _rtc_expire(self, sid: str, _now: Any) -> None:
+        self._rtc_close(sid)
+        await self._rtc_delete(f"{self._rtc_path()}/{sid}")
+
+    @callback
+    def _rtc_close(self, sid: str) -> None:
+        info = self._rtc.pop(sid, None)
+        if info is None:
+            return
+        info["timer"]()
+        try:
+            info["camera"].close_webrtc_session(sid)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("camera: erro fechando a sessao %s", sid, exc_info=True)
+        _LOGGER.debug("camera: sessao %s fechada", sid)
 
     @callback
     def _on_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
@@ -219,7 +358,7 @@ class AutodomoBridge:
         if payload is None:
             _LOGGER.warning("entidade %s de dominio nao suportado - ignorada", entity_id)
             return False
-        payload = self._with_remote(entity_id, state, payload)
+        payload = self._with_extras(entity_id, state, payload)
         payload["bridge"] = self.bridge_id
         await self.client.put(f"{self._devices_path()}/{device_id_for(entity_id)}", payload)
         self._published.add(entity_id)
@@ -243,7 +382,7 @@ class AutodomoBridge:
             if payload is None:
                 _LOGGER.warning("entidade %s de dominio nao suportado - ignorada", entity_id)
                 continue
-            payload = self._with_remote(entity_id, state, payload)
+            payload = self._with_extras(entity_id, state, payload)
             payload["bridge"] = self.bridge_id
             updates[did] = payload
             self._published.add(entity_id)
@@ -358,13 +497,17 @@ class AutodomoBridge:
         except FirebaseError as err:
             _LOGGER.warning("falha ao publicar estado de %s: %s", entity_id, err)
 
-    # ----- comandos -----
+    # ----- comandos (e sessoes de camera: mesmo esquema de stream) -----
 
-    async def _command_loop(self) -> None:
+    async def _stream_loop(
+        self, path: str, on_event: Callable[[str, str, Any], Awaitable[None]], *, critical: bool = True
+    ) -> None:
+        """critical=False (camera): acesso negado so' espera e tenta de novo - nunca
+        pede reautenticacao (regra ainda nao publicada nao e' ponte revogada)."""
         delay = STREAM_RETRY_MIN_S
         while not self._stopped.is_set():
             try:
-                await self.client.stream(self._commands_path(), self._on_command_event)
+                await self.client.stream(path, on_event)
                 delay = STREAM_RETRY_MIN_S
             except StreamTokenExpired:
                 # Normal a cada ~1 h: renova o ID token e reabre ja'. So' e'
@@ -381,6 +524,10 @@ class AutodomoBridge:
                 delay = STREAM_RETRY_MIN_S
                 continue
             except FirebaseAuthError as err:
+                if not critical:
+                    _LOGGER.debug("stream %s negado (%s), tentando de novo em %ss", path, err, STREAM_RETRY_MAX_S)
+                    await asyncio.sleep(STREAM_RETRY_MAX_S)
+                    continue
                 # 401 ao abrir: pode ser so' token velho - confirma com um refresh.
                 try:
                     await self.client.refresh()
@@ -391,11 +538,11 @@ class AutodomoBridge:
                 except FirebaseError:
                     pass
             except FirebaseError as err:
-                _LOGGER.debug("stream de comandos caiu (%s), reconectando em %ss", err, delay)
+                _LOGGER.debug("stream %s caiu (%s), reconectando em %ss", path, err, delay)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("erro inesperado no stream de comandos")
+                _LOGGER.exception("erro inesperado no stream %s", path)
             await asyncio.sleep(delay + random.uniform(0, 1))
             delay = min(delay * 2, STREAM_RETRY_MAX_S)
 

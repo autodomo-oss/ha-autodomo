@@ -50,6 +50,7 @@ TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
 | valve | abrir/fechar/parar, posição |
 | water_heater | liga/desliga, temperatura alvo/atual, modo |
 | humidifier | liga/desliga, umidade alvo/atual, modo |
+| camera | vídeo ao vivo no app por WebRTC, direto do HA para o celular (o vídeo não passa pela nuvem do AutoDomo; precisa de câmera com stream, ex.: RTSP via go2rtc do HA). Só entra se escolhida nas opções |
 
 Contrato de dados: [`AutoDomo/autodomo-cloud`](https://github.com/AutoDomo/autodomo-cloud)
 (`docs/modelo-dados.md`).

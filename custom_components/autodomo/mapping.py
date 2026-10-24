@@ -24,7 +24,7 @@ def device_id_for(entity_id: str) -> str:
 
 KINDS = (
     "light", "switch", "cover", "sensor", "binary_sensor", "climate", "lock", "fan", "scene", "button",
-    "media_player", "vacuum", "alarm_control_panel", "valve", "water_heater", "humidifier",
+    "media_player", "vacuum", "alarm_control_panel", "valve", "water_heater", "humidifier", "camera",
 )
 # Dominios com '_' no nome primeiro: "binary_sensor_x" nao pode virar "binary.sensor_x".
 _DOMAINS = sorted({*KINDS, "input_boolean"}, key=len, reverse=True)
@@ -181,6 +181,10 @@ def device_payload(state: State, room: str | None) -> dict[str, Any] | None:
             caps["modes"] = [str(m) for m in attrs["available_modes"]]
         if attrs.get("device_class"):
             caps["device_class"] = attrs["device_class"]  # humidifier / dehumidifier
+    elif kind == "camera":
+        # webrtc de verdade vem da ponte (precisa do objeto da camera); aqui
+        # so' o que da' pra saber pelo estado.
+        caps["webrtc"] = bool(features & 2)  # STREAM
 
     payload: dict[str, Any] = {
         "kind": kind,
@@ -279,6 +283,8 @@ def state_payload(state: State, ts_ms: int) -> dict[str, Any]:
             out["mode"] = str(attrs["mode"])
         if attrs.get("action"):
             out["action"] = str(attrs["action"])
+    elif kind == "camera":
+        out["state"] = state.state  # idle/streaming/recording
     return out
 
 

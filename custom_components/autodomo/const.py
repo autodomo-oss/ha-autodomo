@@ -48,6 +48,7 @@ SUPPORTED_DOMAINS: tuple[str, ...] = (
     "valve",
     "water_heater",
     "humidifier",
+    "camera",
 )
 
 # Pre-selecionados na instalacao e cobertos pelo "expor automaticamente":
@@ -61,5 +62,9 @@ HEARTBEAT_INTERVAL_S = 30
 COMMAND_MAX_AGE_S = 120  # comandos da fila offline do app sobem ate 2 min depois
 STREAM_RETRY_MIN_S = 2
 STREAM_RETRY_MAX_S = 60
+# Camera (WebRTC): oferta mais velha que isso ao chegar e' descartada; sessao
+# aberta (app travou sem apagar) e' fechada depois do limite.
+RTC_OFFER_MAX_AGE_S = 60
+RTC_SESSION_MAX_S = 1800
 
 ISSUE_MISSING_ENTITY = "missing_entity"
