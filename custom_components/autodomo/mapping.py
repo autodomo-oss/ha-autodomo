@@ -54,7 +54,14 @@ def _num(v: Any) -> float | int | None:
     return int(f) if f.is_integer() else f
 
 
+# Sem estado proprio: o "estado" e' a hora do ultimo acionamento, e "unknown"
+# so' quer dizer que nunca foi acionado - nao que esta' offline.
+STATELESS_DOMAINS = ("button", "scene")
+
+
 def _available(state: State) -> bool:
+    if state.domain in STATELESS_DOMAINS:
+        return state.state != STATE_UNAVAILABLE
     return state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
 
 
