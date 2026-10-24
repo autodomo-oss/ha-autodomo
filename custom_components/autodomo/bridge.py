@@ -77,16 +77,18 @@ class AutodomoBridge:
     async def async_start(self) -> None:
         if self.auto_add:
             self.entity_ids |= {s.entity_id for s in self.hass.states.async_all() if s.domain in AUTO_DOMAINS}
-        await self._publish_devices()
-        await self._publish_all_states()
-        self._check_missing_entities()
-        # Assina ANTES de qualquer espera: nada escapa entre a foto e o listener.
+        # Assina ANTES de publicar a foto: as publicacoes esperam a rede, e o que
+        # mudar nesse meio tempo se perdia (no boot do HA as entidades MQTT vao de
+        # unavailable pra unknown justo ai' - botao ficava offline no app pra sempre).
         if self.auto_add:
             self._unsub.append(self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._on_any_state_changed))
         else:
             self._unsub.append(
                 async_track_state_change_event(self.hass, list(self.entity_ids), self._on_state_changed)
             )
+        await self._publish_devices()
+        await self._publish_all_states()
+        self._check_missing_entities()
         self._tasks.append(self.hass.async_create_background_task(self._command_loop(), "autodomo_commands"))
         self._tasks.append(self.hass.async_create_background_task(self._heartbeat_loop(), "autodomo_heartbeat"))
         _LOGGER.info(
