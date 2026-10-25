@@ -20,6 +20,7 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 from homeassistant.helpers.event import EventStateChangedData, async_call_later, async_track_state_change_event
+from homeassistant.helpers.storage import Store
 
 from .const import (
     AUTO_DOMAINS,
@@ -27,6 +28,8 @@ from .const import (
     DOMAIN,
     HEARTBEAT_INTERVAL_S,
     ISSUE_MISSING_ENTITY,
+    REMOTE_KEYSETS,
+    REMOTE_MAX_COMMANDS,
     RTC_OFFER_MAX_AGE_S,
     RTC_SESSION_MAX_S,
     STATE_DEBOUNCE_S,
@@ -89,6 +92,9 @@ class AutodomoBridge:
         # Camera: sessoes WebRTC abertas (sid -> camera, contador de candidatos,
         # trava pra resposta sair antes dos candidatos, timer do limite).
         self._rtc: dict[str, dict[str, Any]] = {}
+        # remote.* do Broadlink: comandos aprendidos ([{d: aparelho, c: comando}]),
+        # lidos do arquivo de codigos dele - tambem e' a lista do que o app pode enviar.
+        self._remote_cmds: dict[str, list[dict[str, str]]] = {}
 
     # ----- ciclo de vida -----
 
@@ -106,6 +112,7 @@ class AutodomoBridge:
             self._unsub.append(
                 async_track_state_change_event(self.hass, list(self.entity_ids), self._on_state_changed)
             )
+        await self._load_remote_commands()
         await self._publish_devices()
         await self._publish_all_states()
         self._check_missing_entities()
@@ -212,7 +219,65 @@ class AutodomoBridge:
             payload["caps"] = {**payload.get("caps", {}), "remote": remote}
         if entity_id.startswith("camera.") and (camera := self._camera(entity_id)) is not None:
             payload["caps"] = {**payload.get("caps", {}), "webrtc": _supports_webrtc(camera)}
+        if entity_id.startswith("remote."):
+            payload["caps"] = {**payload.get("caps", {}), **self._remote_extras(entity_id)}
         return payload
+
+    # ----- remote.*: teclas fixas por integracao + comandos aprendidos -----
+
+    def _remote_platform(self, entity_id: str) -> str | None:
+        entry = er.async_get(self.hass).async_get(entity_id)
+        return entry.platform if entry else None
+
+    def _remote_extras(self, entity_id: str) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if keys := REMOTE_KEYSETS.get(self._remote_platform(entity_id) or ""):
+            out["keys"] = dict(keys)
+        if cmds := self._remote_cmds.get(entity_id):
+            out["commands"] = cmds
+        return out
+
+    async def _load_remote_commands(self) -> set[str]:
+        """Rele os codigos do Broadlink; devolve os remotes cuja lista mudou
+        (comando aprendido/apagado no HA depois)."""
+        ent_reg = er.async_get(self.hass)
+        changed: set[str] = set()
+        for entity_id in [e for e in self.entity_ids if e.startswith("remote.")]:
+            entry = ent_reg.async_get(entity_id)
+            if entry is None or entry.platform != "broadlink" or not entry.unique_id:
+                continue
+            try:
+                data = await Store(self.hass, 1, f"broadlink_remote_{entry.unique_id}_codes").async_load()
+            except Exception:  # noqa: BLE001 - arquivo ilegivel: fica a lista anterior
+                _LOGGER.debug("codigos do Broadlink de %s ilegiveis", entity_id, exc_info=True)
+                continue
+            cmds = [
+                {"d": str(dev), "c": str(cmd)}
+                for dev, codes in (data or {}).items()
+                if isinstance(codes, dict)
+                for cmd in codes
+                if 0 < len(str(dev)) <= 100 and 0 < len(str(cmd)) <= 100
+            ][:REMOTE_MAX_COMMANDS]
+            if cmds != self._remote_cmds.get(entity_id, []):
+                changed.add(entity_id)
+                if cmds:
+                    self._remote_cmds[entity_id] = cmds
+                else:
+                    self._remote_cmds.pop(entity_id, None)
+        return changed
+
+    def _remote_allowed(self, entity_id: str, data: dict[str, Any]) -> bool:
+        """So' comandos/atividades que o app recebeu na lista - nada de codigo cru."""
+        if "command" in data:
+            command, device = data["command"], data.get("device", "")
+            keys = REMOTE_KEYSETS.get(self._remote_platform(entity_id) or "", {})
+            if not device and command in keys.values():
+                return True
+            return any(c["c"] == command and c["d"] == device for c in self._remote_cmds.get(entity_id, []))
+        if "activity" in data:
+            state = self.hass.states.get(entity_id)
+            return state is not None and data["activity"] in (state.attributes.get("activity_list") or [])
+        return True
 
     # ----- camera: video direto HA -> celular (WebRTC) -----
 
@@ -589,6 +654,9 @@ class AutodomoBridge:
                 _LOGGER.warning("comando %s invalido para %s: %s", cmd_id, entity_id, cmd.get("action"))
                 return
             domain, service, data = mapped
+            if domain == "remote" and not self._remote_allowed(entity_id, data):
+                _LOGGER.warning("comando %s fora da lista de %s - ignorado", cmd_id, entity_id)
+                return
             _LOGGER.debug("comando %s: %s.%s %s -> %s", cmd_id, domain, service, data, entity_id)
             await self.hass.services.async_call(domain, service, {"entity_id": entity_id, **data}, blocking=True)
         except Exception:  # noqa: BLE001
@@ -613,6 +681,9 @@ class AutodomoBridge:
                 first = False
                 await self._publish_alexa()
                 await self._reconcile_unpublished()
+                for entity_id in await self._load_remote_commands():
+                    if entity_id in self._published and (state := self.hass.states.get(entity_id)) is not None:
+                        await self._publish_device(entity_id, state)
                 self._check_missing_entities()
             except FirebaseAuthError as err:
                 self._on_auth_failed(err)

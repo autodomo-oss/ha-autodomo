@@ -24,7 +24,7 @@ def device_id_for(entity_id: str) -> str:
 
 KINDS = (
     "light", "switch", "cover", "sensor", "binary_sensor", "climate", "lock", "fan", "scene", "button",
-    "media_player", "vacuum", "alarm_control_panel", "valve", "water_heater", "humidifier", "camera",
+    "media_player", "vacuum", "alarm_control_panel", "valve", "water_heater", "humidifier", "camera", "remote",
 )
 # Dominios com '_' no nome primeiro: "binary_sensor_x" nao pode virar "binary.sensor_x".
 _DOMAINS = sorted({*KINDS, "input_boolean"}, key=len, reverse=True)
@@ -185,6 +185,11 @@ def device_payload(state: State, room: str | None) -> dict[str, Any] | None:
         # webrtc de verdade vem da ponte (precisa do objeto da camera); aqui
         # so' o que da' pra saber pelo estado.
         caps["webrtc"] = bool(features & 2)  # STREAM
+    elif kind == "remote":
+        # Teclas/comandos vem da ponte (registro + arquivo de codigos).
+        caps["onoff"] = True
+        if features & 4 and attrs.get("activity_list"):  # ACTIVITY (ex: Harmony)
+            caps["activities"] = [str(a) for a in attrs["activity_list"]][:30]
 
     payload: dict[str, Any] = {
         "kind": kind,
@@ -285,6 +290,10 @@ def state_payload(state: State, ts_ms: int) -> dict[str, Any]:
             out["action"] = str(attrs["action"])
     elif kind == "camera":
         out["state"] = state.state  # idle/streaming/recording
+    elif kind == "remote":
+        out["on"] = state.state == STATE_ON
+        if attrs.get("current_activity"):
+            out["activity"] = str(attrs["current_activity"])[:80]
     return out
 
 
@@ -376,4 +385,15 @@ def service_for_command(domain: str, action: str, params: Any) -> tuple[str, str
             return domain, "set_humidity", {"humidity": max(0, min(100, int(p["humidity"])))}
         if action == "set_mode" and isinstance(p.get("mode"), str):
             return domain, "set_mode", {"mode": p["mode"]}
+    elif kind == "remote":
+        # Qual comando/atividade vale e' a ponte que confere (lista publicada).
+        if action in ("turn_on", "turn_off", "toggle"):
+            return domain, action, {}
+        command = p.get("command")
+        if action == "send_command" and isinstance(command, str) and 0 < len(command) <= 100:
+            device = p.get("device")
+            return domain, "send_command", {"command": command, **({"device": device} if isinstance(device, str) and device else {})}
+        activity = p.get("activity")
+        if action == "set_activity" and isinstance(activity, str) and 0 < len(activity) <= 100:
+            return domain, "turn_on", {"activity": activity}
     return None
