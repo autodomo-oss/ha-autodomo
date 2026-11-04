@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import Awaitable, Callable
 from functools import partial
 import logging
 import random
+import re
 import time
 from typing import Any
 
@@ -290,6 +292,28 @@ class AutodomoBridge:
             return get_camera_from_entity_id(self.hass, entity_id)
         except HomeAssistantError:
             return None
+
+    async def _snapshot(self, entity_id: str, params: Any) -> None:
+        """Foto da camera pro aviso de sensor: JPEG (640 px) em snapshots/{casa}/{id}/img.
+
+        A nuvem pede (notifySensor) e reenvia o aviso com a imagem; a foto some em 24 h.
+        """
+        alert_id = str((params or {}).get("id", "")) if isinstance(params, dict) else ""
+        if not re.fullmatch(r"[\w-]{1,64}", alert_id) or not entity_id.startswith("camera."):
+            return
+        from homeassistant.components.camera import async_get_image  # noqa: PLC0415
+        from homeassistant.exceptions import HomeAssistantError  # noqa: PLC0415
+
+        try:
+            image = await async_get_image(self.hass, entity_id, timeout=10, width=640)
+        except HomeAssistantError as err:
+            _LOGGER.info("camera %s sem foto pro aviso: %s", entity_id, err)
+            return
+        data = base64.b64encode(image.content).decode()
+        if len(data) >= 1_500_000:
+            _LOGGER.info("foto de %s grande demais (%d KB) - ignorada", entity_id, len(image.content) // 1024)
+            return
+        await self.client.put(f"snapshots/{self.home_id}/{alert_id}/img", data)
 
     async def _on_rtc_event(self, event: str, path: str, data: Any) -> None:
         if path in ("", "/"):
@@ -648,6 +672,9 @@ class AutodomoBridge:
             entity_id = entity_id_for(str(cmd.get("deviceId", "")))
             if entity_id is None or entity_id not in self.entity_ids:
                 _LOGGER.warning("comando %s para entidade nao exposta: %s", cmd_id, cmd.get("deviceId"))
+                return
+            if cmd.get("action") == "snapshot":
+                await self._snapshot(entity_id, cmd.get("params"))
                 return
             mapped = service_for_command(entity_id.split(".", 1)[0], str(cmd.get("action", "")), cmd.get("params"))
             if mapped is None:
