@@ -28,6 +28,9 @@ CONF_ADVANCED = "advanced"
 # Opcoes.
 CONF_ENTITIES = "entities"
 CONF_AUTO_ADD = "auto_add"
+# Comandos do controle remoto (remote.*, ex.: Broadlink) digitados nas opcoes:
+# um por linha, "aparelho/comando"; "remote.x: aparelho/comando" vale so' pra esse remote.
+CONF_REMOTE_COMMANDS = "remote_commands"
 
 # Dominios do HA que a ponte sabe publicar (= kinds do contrato).
 SUPPORTED_DOMAINS: tuple[str, ...] = (

@@ -22,11 +22,11 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 from homeassistant.helpers.event import EventStateChangedData, async_call_later, async_track_state_change_event
-from homeassistant.helpers.storage import Store
 
 from .const import (
     AUTO_DOMAINS,
     COMMAND_MAX_AGE_S,
+    CONF_REMOTE_COMMANDS,
     DOMAIN,
     HEARTBEAT_INTERVAL_S,
     ISSUE_MISSING_ENTITY,
@@ -114,7 +114,7 @@ class AutodomoBridge:
             self._unsub.append(
                 async_track_state_change_event(self.hass, list(self.entity_ids), self._on_state_changed)
             )
-        await self._load_remote_commands()
+        self._load_remote_commands()
         await self._publish_devices()
         await self._publish_all_states()
         self._check_missing_entities()
@@ -225,7 +225,7 @@ class AutodomoBridge:
             payload["caps"] = {**payload.get("caps", {}), **self._remote_extras(entity_id)}
         return payload
 
-    # ----- remote.*: teclas fixas por integracao + comandos aprendidos -----
+    # ----- remote.*: teclas fixas por integracao + comandos digitados nas opcoes -----
 
     def _remote_platform(self, entity_id: str) -> str | None:
         entry = er.async_get(self.hass).async_get(entity_id)
@@ -239,33 +239,30 @@ class AutodomoBridge:
             out["commands"] = cmds
         return out
 
-    async def _load_remote_commands(self) -> set[str]:
-        """Rele os codigos do Broadlink; devolve os remotes cuja lista mudou
-        (comando aprendido/apagado no HA depois)."""
-        ent_reg = er.async_get(self.hass)
-        changed: set[str] = set()
-        for entity_id in [e for e in self.entity_ids if e.startswith("remote.")]:
-            entry = ent_reg.async_get(entity_id)
-            if entry is None or entry.platform != "broadlink" or not entry.unique_id:
+    def _load_remote_commands(self) -> set[str]:
+        """Comandos dos remote.* digitados nas opcoes (um por linha, "aparelho/comando";
+        "remote.x: aparelho/comando" so' pra esse). Devolve os remotes cuja lista mudou."""
+        per: dict[str, list[dict[str, str]]] = {}
+        remotes = [e for e in self.entity_ids if e.startswith("remote.")]
+        for raw in str(self.entry.options.get(CONF_REMOTE_COMMANDS, "")).splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
                 continue
-            try:
-                data = await Store(self.hass, 1, f"broadlink_remote_{entry.unique_id}_codes").async_load()
-            except Exception:  # noqa: BLE001 - arquivo ilegivel: fica a lista anterior
-                _LOGGER.debug("codigos do Broadlink de %s ilegiveis", entity_id, exc_info=True)
+            target = None
+            m = re.match(r"^(remote\.[a-z0-9_]+)\s*:\s*(.+)$", line)
+            if m:
+                target, line = m.group(1), m.group(2).strip()
+            dev, sep, cmd = line.partition("/")
+            dev, cmd = (dev.strip(), cmd.strip()) if sep else ("", line)
+            if not cmd or len(cmd) > 100 or len(dev) > 100:
                 continue
-            cmds = [
-                {"d": str(dev), "c": str(cmd)}
-                for dev, codes in (data or {}).items()
-                if isinstance(codes, dict)
-                for cmd in codes
-                if 0 < len(str(dev)) <= 100 and 0 < len(str(cmd)) <= 100
-            ][:REMOTE_MAX_COMMANDS]
-            if cmds != self._remote_cmds.get(entity_id, []):
-                changed.add(entity_id)
-                if cmds:
-                    self._remote_cmds[entity_id] = cmds
-                else:
-                    self._remote_cmds.pop(entity_id, None)
+            for entity_id in [target] if target else remotes:
+                if entity_id in remotes and len(per.setdefault(entity_id, [])) < REMOTE_MAX_COMMANDS:
+                    item = {"d": dev, "c": cmd}
+                    if item not in per[entity_id]:
+                        per[entity_id].append(item)
+        changed = {e for e in set(per) | set(self._remote_cmds) if per.get(e, []) != self._remote_cmds.get(e, [])}
+        self._remote_cmds = per
         return changed
 
     def _remote_allowed(self, entity_id: str, data: dict[str, Any]) -> bool:
@@ -708,7 +705,7 @@ class AutodomoBridge:
                 first = False
                 await self._publish_alexa()
                 await self._reconcile_unpublished()
-                for entity_id in await self._load_remote_commands():
+                for entity_id in self._load_remote_commands():
                     if entity_id in self._published and (state := self.hass.states.get(entity_id)) is not None:
                         await self._publish_device(entity_id, state)
                 self._check_missing_entities()

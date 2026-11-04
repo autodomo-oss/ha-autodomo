@@ -54,7 +54,11 @@
         "description": "Marque as entidades que o app AutoDomo deve mostrar. Só domínios suportados aparecem.",
         "data": {
           "entities": "Entidades",
-          "auto_add": "Expor automaticamente novas luzes, interruptores, persianas, clima, fechaduras e ventiladores"
+          "auto_add": "Expor automaticamente novas luzes, interruptores, persianas, clima, fechaduras e ventiladores",
+          "remote_commands": "Comandos do controle remoto (opcional)"
+        },
+        "data_description": {
+          "remote_commands": "Para remote.* (ex.: Broadlink): um comando por linha, no formato aparelho/comando — os mesmos nomes que você usou ao aprender no HA (ex.: tv/power). Para valer só para um controle, comece a linha com remote.nome: ."
         }
       }
     }

@@ -54,7 +54,11 @@
         "description": "Select the entities the AutoDomo app should show. Only supported domains are listed.",
         "data": {
           "entities": "Entities",
-          "auto_add": "Automatically expose new lights, switches, covers, climate, locks and fans"
+          "auto_add": "Automatically expose new lights, switches, covers, climate, locks and fans",
+          "remote_commands": "Remote commands (optional)"
+        },
+        "data_description": {
+          "remote_commands": "For remote.* (e.g. Broadlink): one command per line as device/command — the same names you used when learning them in HA (e.g. tv/power). To limit a line to one remote, start it with remote.name: ."
         }
       }
     }

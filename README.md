@@ -51,7 +51,7 @@ TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
 | water_heater | liga/desliga, temperatura alvo/atual, modo |
 | humidifier | liga/desliga, umidade alvo/atual, modo |
 | camera | vídeo ao vivo no app por WebRTC, direto do HA para o celular (o vídeo não passa pela nuvem do AutoDomo; precisa de câmera com stream, ex.: RTSP via go2rtc do HA). Só entra se escolhida nas opções |
-| remote | controle no app: Android TV, Apple TV, Roku e Samsung com teclas prontas; Broadlink com os comandos aprendidos no HA (lista atualizada sozinha); atividades (ex.: Harmony). Só envia comando que está na lista. Só entra se escolhido nas opções |
+| remote | controle no app: Android TV, Apple TV, Roku e Samsung com teclas prontas; Broadlink e outros: os comandos que você digitar em *Configurar* (um por linha, `aparelho/comando`, os nomes usados ao aprender no HA); atividades (ex.: Harmony). Só envia comando que está na lista. Só entra se escolhido nas opções |
 
 Contrato de dados: [`AutoDomo/autodomo-cloud`](https://github.com/AutoDomo/autodomo-cloud)
 (`docs/modelo-dados.md`).

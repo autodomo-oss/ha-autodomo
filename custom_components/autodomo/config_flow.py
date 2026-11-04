@@ -21,6 +21,7 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    CONF_REMOTE_COMMANDS,
     AUTO_DOMAINS,
     CONF_ADVANCED,
     CONF_API_KEY,
@@ -85,15 +86,18 @@ def _default_entities(hass: HomeAssistant) -> list[str]:
     )
 
 
-def _entities_schema(current: list[str], auto_add: bool) -> vol.Schema:
-    return vol.Schema(
-        {
-            vol.Optional(CONF_ENTITIES, default=current): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=list(SUPPORTED_DOMAINS), multiple=True)
-            ),
-            vol.Optional(CONF_AUTO_ADD, default=auto_add): selector.BooleanSelector(),
-        }
-    )
+def _entities_schema(current: list[str], auto_add: bool, remote_commands: str | None = None) -> vol.Schema:
+    fields: dict[Any, Any] = {
+        vol.Optional(CONF_ENTITIES, default=current): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=list(SUPPORTED_DOMAINS), multiple=True)
+        ),
+        vol.Optional(CONF_AUTO_ADD, default=auto_add): selector.BooleanSelector(),
+    }
+    if remote_commands is not None:  # so' nas opcoes (depois de pareado)
+        fields[vol.Optional(CONF_REMOTE_COMMANDS, default=remote_commands)] = selector.TextSelector(
+            selector.TextSelectorConfig(multiline=True)
+        )
+    return vol.Schema(fields)
 
 
 async def _pair(
@@ -236,10 +240,13 @@ class AutodomoOptionsFlow(OptionsFlow):
                 data={
                     CONF_ENTITIES: user_input.get(CONF_ENTITIES, []),
                     CONF_AUTO_ADD: user_input.get(CONF_AUTO_ADD, False),
+                    CONF_REMOTE_COMMANDS: str(user_input.get(CONF_REMOTE_COMMANDS, "")).strip(),
                 },
             )
         opts = self.config_entry.options
         return self.async_show_form(
             step_id="init",
-            data_schema=_entities_schema(list(opts.get(CONF_ENTITIES, [])), bool(opts.get(CONF_AUTO_ADD, False))),
+            data_schema=_entities_schema(
+                list(opts.get(CONF_ENTITIES, [])), bool(opts.get(CONF_AUTO_ADD, False)), str(opts.get(CONF_REMOTE_COMMANDS, ""))
+            ),
         )
