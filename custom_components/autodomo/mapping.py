@@ -210,6 +210,11 @@ def state_payload(state: State, ts_ms: int) -> dict[str, Any]:
 
     if kind in ("light", "switch", "fan", "binary_sensor"):
         out["on"] = state.state == STATE_ON
+    if kind in ("light", "switch") and attrs.get("confirmado") is False:
+        # Gateway AutoDomo (fw 0.1.97+): o "on" acima e' otimista (comando
+        # enviado, o rele ainda nao respondeu). O app mostra "Ligando..." ate'
+        # chegar o estado sem este campo.
+        out["pending"] = True
     if kind == "light":
         if attrs.get("brightness") is not None:
             out["brightness"] = int(attrs["brightness"])
