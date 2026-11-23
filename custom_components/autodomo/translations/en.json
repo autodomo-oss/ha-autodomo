@@ -66,7 +66,7 @@
   "issues": {
     "missing_entity": {
       "title": "Entity exposed to AutoDomo no longer exists",
-      "description": "Entity `{entity_id}` is selected for the AutoDomo app but no longer exists in Home Assistant. Open **Configure** on the AutoDomo integration and unselect it."
+      "description": "Entity `{entity_id}` is selected for the AutoDomo app but no longer exists in Home Assistant. It was removed from the app (it comes back by itself if it reappears). To clear this notice, open **Configure** on the AutoDomo integration and unselect it."
     }
   }
 }

@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     HEARTBEAT_INTERVAL_S,
     ISSUE_MISSING_ENTITY,
+    MISSING_GRACE_S,
     REMOTE_KEYSETS,
     REMOTE_MAX_COMMANDS,
     RTC_OFFER_MAX_AGE_S,
@@ -83,6 +84,10 @@ class AutodomoBridge:
         self.auth_failed = False
 
         self._published: set[str] = set()  # entidades cujo devices/{id} ja' foi escrito
+        # Escolhida que sumiu do HA: desde quando (monotonic) e quais ja' foram
+        # tiradas do app. Continua escolhida - se voltar, o reconcile republica.
+        self._missing_since: dict[str, float] = {}
+        self._gone: set[str] = set()
         # Controle remoto (ex: modulo IR): botoes do mesmo aparelho do HA de um
         # botao escolhido entram juntos - o app monta a tela do controle com eles.
         self._remote_devices: set[str] = set()
@@ -411,12 +416,23 @@ class AutodomoBridge:
 
     @callback
     def _on_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
-        """Botao gravado/apagado depois (favorito novo no modulo IR) entra/sai sozinho."""
+        """Entidade apagada do HA sai do app; botao novo do controle remoto entra."""
         entity_id = event.data["entity_id"]
-        if not entity_id.startswith("button.") or entity_id in self.selected:
-            return
         action = event.data["action"]
+        if action == "remove" and entity_id in self.selected:
+            # Escolhida nas opcoes: sai do app ja', mas continua escolhida (se o
+            # aparelho voltar - ex: re-pareado - o reconcile publica de novo).
+            self._published.discard(entity_id)
+            self._gone.add(entity_id)
+            self.hass.async_create_task(self._unpublish(entity_id))
+            return
+        if not entity_id.startswith("button.") and not (self.auto_add and action == "remove"):
+            return
+        if entity_id in self.selected:
+            return
         if action == "create":
+            if not entity_id.startswith("button."):
+                return
             entry = er.async_get(self.hass).async_get(entity_id)
             if entry is None or entry.device_id not in self._remote_devices or entity_id in self.entity_ids:
                 return
@@ -448,6 +464,8 @@ class AutodomoBridge:
         payload["bridge"] = self.bridge_id
         await self.client.put(f"{self._devices_path()}/{device_id_for(entity_id)}", payload)
         self._published.add(entity_id)
+        self._gone.discard(entity_id)  # voltou: se sumir de novo, sai do app de novo
+        self._missing_since.pop(entity_id, None)
         _LOGGER.debug("dispositivo %s publicado", entity_id)
         return True
 
@@ -523,9 +541,19 @@ class AutodomoBridge:
     @callback
     def _check_missing_entities(self) -> None:
         ent_reg = er.async_get(self.hass)
+        now = time.monotonic()
         for entity_id in self.selected:
             issue_id = f"{ISSUE_MISSING_ENTITY}_{self.entry.entry_id}_{entity_id}"
             if self.hass.states.get(entity_id) is None and ent_reg.async_get(entity_id) is None:
+                # Tira do app depois de MISSING_GRACE_S com o HA ja' rodando: no
+                # boot entidade de YAML/MQTT ainda pode nao ter carregado.
+                if self.hass.is_running and entity_id not in self._gone:
+                    since = self._missing_since.setdefault(entity_id, now)
+                    if now - since >= MISSING_GRACE_S:
+                        self._gone.add(entity_id)
+                        self._published.discard(entity_id)
+                        _LOGGER.info("entidade %s nao existe mais no HA - tirada do app", entity_id)
+                        self.hass.async_create_task(self._unpublish(entity_id))
                 ir.async_create_issue(
                     self.hass,
                     DOMAIN,
@@ -536,6 +564,7 @@ class AutodomoBridge:
                     translation_placeholders={"entity_id": entity_id},
                 )
             else:
+                self._missing_since.pop(entity_id, None)
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
 
     # ----- state -----

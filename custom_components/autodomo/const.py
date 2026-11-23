@@ -99,3 +99,5 @@ REMOTE_KEYSETS: dict[str, dict[str, str]] = {
 REMOTE_MAX_COMMANDS = 300
 
 ISSUE_MISSING_ENTITY = "missing_entity"
+# Entidade escolhida que nao existe mais sai do app depois disto (HA ja' rodando).
+MISSING_GRACE_S = 300
