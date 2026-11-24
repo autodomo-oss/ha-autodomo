@@ -101,3 +101,6 @@ REMOTE_MAX_COMMANDS = 300
 ISSUE_MISSING_ENTITY = "missing_entity"
 # Entidade escolhida que nao existe mais sai do app depois disto (HA ja' rodando).
 MISSING_GRACE_S = 300
+
+# Mapa da rede mesh: intervalo minimo entre duas varreduras (cada uma passa por todos os nos).
+MESHMAP_MIN_INTERVAL_S = 60

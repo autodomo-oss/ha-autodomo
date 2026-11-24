@@ -1,6 +1,9 @@
 {
   "domain": "autodomo",
   "name": "AutoDomo",
+  "after_dependencies": [
+    "mqtt"
+  ],
   "codeowners": [
     "@eltonssilva"
   ],
@@ -11,5 +14,5 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/autodomo-oss/ha-autodomo/issues",
   "requirements": [],
-  "version": "0.1.17"
+  "version": "0.1.18"
 }

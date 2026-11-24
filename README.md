@@ -33,6 +33,12 @@ TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
   for apagada; em 5 min, se já não existir quando o HA liga) e o HA avisa em
   *Reparos*. Se ela voltar, reaparece no app.
 - *Baixar diagnóstico* na integração gera um relatório sem segredos para suporte.
+- Mapa da rede (só para gateways AutoDomo BLE Mesh, só quando o dono da casa
+  pede no app): o HA lê pelo próprio MQTT o sinal entre os aparelhos
+  (`AT+MESHNODES?`, `AT+DEVICES?`, `AT+NEIGHBORS?`, `AT+MESHNEIGHBORS=`) — só
+  leitura, um aparelho por vez — e grava no app endereço, tipo, firmware,
+  nome/cômodo do aparelho no HA e o RSSI de cada vizinho. Sem MQTT no HA, nada
+  acontece.
 
 ## O que é exposto
 

@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     HEARTBEAT_INTERVAL_S,
     ISSUE_MISSING_ENTITY,
+    MESHMAP_MIN_INTERVAL_S,
     MISSING_GRACE_S,
     REMOTE_KEYSETS,
     REMOTE_MAX_COMMANDS,
@@ -39,7 +40,7 @@ from .const import (
     STREAM_RETRY_MAX_S,
     STREAM_RETRY_MIN_S,
 )
-from . import alexa
+from . import alexa, meshmap
 from .firebase import FirebaseAuthError, FirebaseClient, FirebaseError, StreamTokenExpired
 from .mapping import device_id_for, device_payload, entity_id_for, service_for_command, state_payload
 
@@ -102,6 +103,9 @@ class AutodomoBridge:
         # remote.* do Broadlink: comandos aprendidos ([{d: aparelho, c: comando}]),
         # lidos do arquivo de codigos dele - tambem e' a lista do que o app pode enviar.
         self._remote_cmds: dict[str, list[dict[str, str]]] = {}
+        # Mapa da rede mesh (tela escondida do app): uma varredura por vez.
+        self._meshmap_task: asyncio.Task[None] | None = None
+        self._meshmap_last = 0.0
 
     # ----- ciclo de vida -----
 
@@ -175,6 +179,9 @@ class AutodomoBridge:
 
     def _rtc_path(self) -> str:
         return f"rtc/{self.home_id}/{self.bridge_id}"
+
+    def _meshmap_path(self) -> str:
+        return f"homes/{self.home_id}/meshMap/{self.bridge_id}"
 
     # ----- devices -----
 
@@ -695,6 +702,9 @@ class AutodomoBridge:
             if cmd.get("action") == "speak":
                 await alexa.speak(self.hass, cmd.get("params"))
                 return
+            if cmd.get("action") == "mesh_map":
+                self._start_meshmap()
+                return
             entity_id = entity_id_for(str(cmd.get("deviceId", "")))
             if entity_id is None or entity_id not in self.entity_ids:
                 _LOGGER.warning("comando %s para entidade nao exposta: %s", cmd_id, cmd.get("deviceId"))
@@ -719,6 +729,54 @@ class AutodomoBridge:
                 await self.client.delete(f"{self._commands_path()}/{cmd_id}")
             except FirebaseError as err:
                 _LOGGER.debug("nao deu pra apagar comando %s: %s", cmd_id, err)
+
+    # ----- mapa da rede mesh -----
+
+    def _start_meshmap(self) -> None:
+        if self._meshmap_task is not None and not self._meshmap_task.done():
+            _LOGGER.debug("mapa da rede ja' em andamento")
+            return
+        if time.monotonic() - self._meshmap_last < MESHMAP_MIN_INTERVAL_S:
+            _LOGGER.debug("mapa da rede pedido de novo cedo demais - ignorado")
+            return
+        self._meshmap_last = time.monotonic()
+        self._meshmap_task = self.hass.async_create_background_task(self._run_meshmap(), "autodomo_meshmap")
+        self._tasks.append(self._meshmap_task)
+
+    def _published_device_id(self, entity_id: str) -> str | None:
+        return device_id_for(entity_id) if entity_id in self._published else None
+
+    async def _run_meshmap(self) -> None:
+        path = self._meshmap_path()
+
+        async def progress(done: int, total: int) -> None:
+            try:  # progresso e' so' enfeite na tela - falha aqui nao derruba a varredura
+                await self.client.patch(path, {"state": "running", "done": done, "total": total, "ts": _now_ms()})
+            except FirebaseError as err:
+                _LOGGER.debug("progresso do mapa nao gravado: %s", err)
+
+        try:
+            await self.client.patch(path, {"state": "running", "done": 0, "total": 0, "ts": _now_ms(), "error": None})
+            started = time.monotonic()
+            nodes = await meshmap.collect(self.hass, self._published_device_id, progress)
+            await self.client.put(path, {"state": "done", "ts": _now_ms(), "nodes": nodes})
+            _LOGGER.info("mapa da rede: %d no(s) em %.0f s", len(nodes), time.monotonic() - started)
+        except meshmap.MeshMapError as err:
+            _LOGGER.info("mapa da rede indisponivel: %s", err)
+            await self._meshmap_fail(path, str(err))
+        except asyncio.CancelledError:
+            raise
+        except FirebaseError as err:
+            _LOGGER.warning("mapa da rede nao foi gravado: %s", err)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("falha no mapa da rede")
+            await self._meshmap_fail(path, "internal")
+
+    async def _meshmap_fail(self, path: str, code: str) -> None:
+        try:
+            await self.client.patch(path, {"state": "error", "error": code, "ts": _now_ms()})
+        except FirebaseError as err:
+            _LOGGER.debug("nao deu pra gravar o erro do mapa: %s", err)
 
     # ----- presenca -----
 
