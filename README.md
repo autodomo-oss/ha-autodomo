@@ -29,7 +29,9 @@ TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
   o HA perde o acesso na hora e pede um código novo (*Reautenticar*).
 - Estado → app a cada mudança (em ~1 s). Comando do app → serviço do HA.
 - Presença: o app mostra a ponte online/offline.
-- *Reparos*: se uma entidade exposta deixar de existir, o HA avisa.
+- Entidade exposta que deixa de existir no HA sai do app sozinha (na hora, se
+  for apagada; em 5 min, se já não existir quando o HA liga) e o HA avisa em
+  *Reparos*. Se ela voltar, reaparece no app.
 - *Baixar diagnóstico* na integração gera um relatório sem segredos para suporte.
 
 ## O que é exposto
@@ -50,11 +52,51 @@ TVs/som e alarme você escolhe. Tudo pode ser mudado depois em *Configurar*.
 | valve | abrir/fechar/parar, posição |
 | water_heater | liga/desliga, temperatura alvo/atual, modo |
 | humidifier | liga/desliga, umidade alvo/atual, modo |
-| camera | vídeo ao vivo no app por WebRTC, direto do HA para o celular (o vídeo não passa pela nuvem do AutoDomo; precisa de câmera com stream, ex.: RTSP via go2rtc do HA). Só entra se escolhida nas opções |
+| camera | vídeo ao vivo no app por WebRTC, direto do HA para o celular (o vídeo não passa pela nuvem do AutoDomo; precisa de câmera com stream, ex.: RTSP via go2rtc do HA). **Fotos** (não vídeo) sobem para a nuvem nos avisos de sensor e no Assistente — ver [Fotos das câmeras](#fotos-das-câmeras-o-que-sai-de-casa). Só entra se escolhida nas opções |
 | remote | controle no app: Android TV, Apple TV, Roku e Samsung com teclas prontas; Broadlink e outros: os comandos que você digitar em *Configurar* (um por linha, `aparelho/comando`, os nomes usados ao aprender no HA); atividades (ex.: Harmony). Só envia comando que está na lista. Só entra se escolhido nas opções |
 
 Contrato de dados: [`AutoDomo/autodomo-cloud`](https://github.com/AutoDomo/autodomo-cloud)
 (`docs/modelo-dados.md`).
+
+## Fotos das câmeras (o que sai de casa)
+
+O vídeo ao vivo vai direto do HA para o celular. **Fotos** paradas, não: elas
+saem de casa e ficam na nuvem do AutoDomo por até 24 h. Isso só vale para as
+câmeras **escolhidas nas opções** desta integração — câmera não escolhida
+nunca é lida.
+
+Quando uma foto é tirada:
+
+- **Aviso de sensor** (ex.: "Porta da frente: aberta"): a nuvem pede uma foto
+  da câmera do mesmo cômodo do sensor (ou da que você escolheu para aquele
+  sensor). Desligar: no app, na tela do sensor, **Foto no aviso → Sem foto**.
+- **Assistente AutoDomo**: quando alguém da casa pede para ele olhar uma câmera
+  (ex.: "tem alguém na garagem?"). Essa foto também é enviada ao provedor de IA
+  do Assistente (Anthropic, modelo Claude) para ser analisada.
+
+Como é: um JPEG de até 640 px, enviado pelo HA (`camera.async_get_image`) para
+`snapshots/{casa}/{aviso}/img` no Firebase Realtime Database do AutoDomo. Só os
+membros da casa recebem o link da foto (com uma chave aleatória) no aviso e no
+histórico do app.
+
+Como some: o link para de funcionar 24 h depois da foto, e uma tarefa agendada
+da nuvem (`snapshotCleanup`, a cada 60 min) apaga do banco as fotos com mais de
+24 h. Para nunca mais enviar fotos de uma câmera, desmarque-a em *Configurar*
+(ela sai do app junto).
+
+### Camera stills (English)
+
+Live video goes straight from HA to the phone. Still images do leave the house:
+only for cameras **selected in this integration's options**, HA uploads a JPEG
+(max 640 px) to `snapshots/{home}/{alert}/img` in the AutoDomo Firebase Realtime
+Database (1) when a sensor alert is sent (camera in the sensor's room, or the one
+chosen for that sensor; turn off per sensor in the app: *Foto no aviso → Sem
+foto*) and (2) when a home member asks the AutoDomo Assistant to look at a
+camera — that image is also sent to the Assistant's AI provider (Anthropic,
+Claude) for analysis. Home members get a link with a random key. The link stops
+working after 24 h and a scheduled cloud job (`snapshotCleanup`, every 60 min)
+deletes images older than 24 h. Unselect the camera in *Configure* to stop all
+uploads from it.
 
 ## Problemas comuns
 
